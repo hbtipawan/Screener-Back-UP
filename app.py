@@ -9,7 +9,7 @@ from vpci_engine import fetch_weekly_data, analyze_stock_v3, DEFAULT_PARAMS
 warnings.filterwarnings("ignore")
 
 # ─── PAGE CONFIGURATION ───
-st.set_page_config(page_title="VPCI Quant Screener", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Pawan Chaturvedi Screener", page_icon="📈", layout="wide")
 
 # ─── PROFESSIONAL HEADER ───
 st.markdown("""
