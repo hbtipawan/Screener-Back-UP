@@ -14,8 +14,8 @@ st.set_page_config(page_title="Pawan Chaturvedi Screener", page_icon="📈", lay
 # ─── PROFESSIONAL HEADER ───
 st.markdown("""
 <div style='text-align: center; padding-top: 10px; padding-bottom: 20px;'>
-    <h1 style='font-size: 3em; margin-bottom: 0px;'>📈 VPCI Quant Screener</h1>
-    <p style='color: #888888; font-size: 1.2em;'>Advanced 7-Gate Momentum & Breakout Analysis System</p>
+    <h1 style='font-size: 3em; margin-bottom: 0px;'>📈 Pawan Chaturvedi Screener</h1>
+    <p style='color: #888888; font-size: 1.2em;'>Advanced Momentum & Breakout Analysis System</p>
 </div>
 """, unsafe_allow_html=True)
 st.divider()
