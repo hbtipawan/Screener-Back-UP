@@ -4,14 +4,21 @@ import warnings
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Import your core logic
 from vpci_engine import fetch_weekly_data, analyze_stock_v3, DEFAULT_PARAMS
 
 warnings.filterwarnings("ignore")
 
-# Set up the web page
-st.set_page_config(page_title="VPCI Screener Dashboard", layout="wide")
-st.title("Investor — Weekly Market Screener")
+# ─── PAGE CONFIGURATION ───
+st.set_page_config(page_title="VPCI Quant Screener", page_icon="📈", layout="wide")
+
+# ─── PROFESSIONAL HEADER ───
+st.markdown("""
+<div style='text-align: center; padding-top: 10px; padding-bottom: 20px;'>
+    <h1 style='font-size: 3em; margin-bottom: 0px;'>📈 VPCI Quant Screener</h1>
+    <p style='color: #888888; font-size: 1.2em;'>Advanced 7-Gate Momentum & Breakout Analysis System</p>
+</div>
+""", unsafe_allow_html=True)
+st.divider()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LOCAL CSV FETCHERS (Dynamic & Bulletproof)
@@ -48,7 +55,6 @@ def fetch_us_symbols(min_price, min_mcap):
         df = pd.read_csv("us_stocks.csv", on_bad_lines="skip")
         df.columns = df.columns.str.strip().str.lower()
         
-        # Dynamically find the symbol column, or default to the first column
         sym_col = next((c for c in df.columns if 'symbol' in c or 'ticker' in c), df.columns[0])
         price_col = next((c for c in df.columns if 'sale' in c or 'price' in c or 'last' in c), None)
         mcap_col = next((c for c in df.columns if 'cap' in c or 'market' in c), None)
@@ -59,14 +65,12 @@ def fetch_us_symbols(min_price, min_mcap):
             if not sym or "/" in sym or "^" in sym or len(sym) > 5 or sym.lower() == "nan" or sym.lower() == "symbol": 
                 continue
             
-            # Only apply the Price filter if the column actually exists in your CSV
             if price_col:
                 try:
                     price = float(str(row[price_col]).replace("$", "").replace(",", ""))
                     if price < min_price: continue
                 except: pass
                 
-            # Only apply the Market Cap filter if the column actually exists in your CSV
             if mcap_col:
                 try:
                     mcap = float(str(row[mcap_col]).replace(",", ""))
@@ -107,6 +111,7 @@ def fetch_etf_symbols(min_price):
     except Exception as e:
         st.error(f"🚨 Missing or broken us_etfs.csv: {e}")
         return ["SPY","QQQ","IWM"]
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # PROCESSING WORKER
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -125,15 +130,14 @@ def process_symbol(symbol, params, market_type):
     return analyze_stock_v3(symbol, df, params)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# UI & EXECUTION
+# UI SIDEBAR
 # ═══════════════════════════════════════════════════════════════════════════════
 
-st.sidebar.header("Screener Settings")
-market_choice = st.sidebar.radio("Select Market", ["NSE Stocks", "BSE Stocks", "US Stocks", "US ETFs"])
+st.sidebar.markdown("### ⚙️ Scan Configuration")
+market_choice = st.sidebar.radio("🌐 Select Market", ["NSE Stocks", "BSE Stocks", "US Stocks", "US ETFs"])
 
-relaxed_mode = st.sidebar.checkbox("Relaxed Mode (Allow 6/7)", value=False)
-workers = st.sidebar.slider("Parallel Workers", min_value=5, max_value=30, value=15)
-test_limit = st.sidebar.number_input("Limit Scan (0 = All)", min_value=0, max_value=10000, value=50, help="Test with smaller batches first.")
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🎛️ Market Filters")
 
 min_price, min_mcap = 5.0, 500000000.0
 if market_choice == "US Stocks":
@@ -141,8 +145,26 @@ if market_choice == "US Stocks":
     min_mcap = st.sidebar.number_input("Min Market Cap ($)", value=500000000.0)
 elif market_choice == "US ETFs":
     min_price = st.sidebar.number_input("Min Price ($)", value=5.0)
+else:
+    st.sidebar.info("Standard filters automatically applied for Indian Markets.")
 
-run_scan = st.sidebar.button("Run Screener", type="primary")
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🎯 Algorithm Settings")
+relaxed_mode = st.sidebar.toggle("Relaxed Mode (Allow 6/7 Gates)", value=False)
+
+# Hide tech settings in an expander for a cleaner mobile experience
+with st.sidebar.expander("🛠️ Advanced Settings"):
+    workers = st.slider("Parallel Workers", min_value=5, max_value=30, value=15)
+    test_limit = st.number_input("Limit Scan (0 = All)", min_value=0, max_value=10000, value=0)
+
+st.sidebar.markdown("---")
+# Full width primary button
+run_scan = st.sidebar.button("🚀 Run Market Scan", type="primary", use_container_width=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN EXECUTION
+# ═══════════════════════════════════════════════════════════════════════════════
 
 if run_scan:
     params = {**DEFAULT_PARAMS, "relaxed": relaxed_mode, "av_key": "demo"}
@@ -162,7 +184,8 @@ if run_scan:
             market_flag = "ETF"
             
     if test_limit > 0: symbols = symbols[:test_limit]
-    st.info(f"Loaded {len(symbols)} symbols. Beginning scan...")
+    
+    st.info(f"📚 Loaded **{len(symbols)}** symbols. Commencing quantitative analysis...")
 
     results, failed = [], []
     progress_bar = st.progress(0)
@@ -174,14 +197,23 @@ if run_scan:
         for f in as_completed(futs):
             done += 1
             progress_bar.progress(done / len(symbols))
-            status_text.text(f"Scanned {done} of {len(symbols)}...")
+            status_text.text(f"Scanning... {done} / {len(symbols)} processed")
             try:
                 r = f.result()
                 if r: results.append(r)
                 else: failed.append(futs[f])
             except: failed.append(futs[f])
 
-    status_text.text(f"Scan complete! Analyzed: {len(results)} | Failed: {len(failed)}")
+    status_text.empty()
+    progress_bar.empty()
+
+    # ─── VISUAL METRICS DASHBOARD ───
+    st.markdown("### 📊 Scan Summary")
+    met1, met2, met3 = st.columns(3)
+    met1.metric("Total Symbols Analyzed", len(results) + len(failed))
+    met2.metric("✅ Candidates Found", len(results))
+    met3.metric("⚠️ Excluded / Insufficient Data", len(failed))
+    st.divider()
 
     # ═══════════════════════════════════════════════════════════════════════════
     # DISPLAY & SMART MARKET CAP
@@ -207,7 +239,7 @@ if run_scan:
         mcap_dict = {}
 
         if top_symbols:
-            with st.spinner(f"Fetching Market Cap metadata..."):
+            with st.spinner(f"Fetching live Market Cap metadata..."):
                 def fetch_mcap(sym):
                     try:
                         import yfinance as yf
@@ -238,17 +270,13 @@ if run_scan:
 
         df_sorted["Market Cap"] = df_sorted["raw_mcap"].apply(format_mcap)
         
-        # ─── INJECT BSE COMPANY NAMES ───
+        # INJECT BSE COMPANY NAMES
         if market_flag == "BSE":
             try:
                 bse_csv = pd.read_csv("bse_stocks.csv")
                 name_col = "Scrip Name" if "Scrip Name" in bse_csv.columns else bse_csv.columns[2]
                 code_col = "Scrip Code" if "Scrip Code" in bse_csv.columns else bse_csv.columns[0]
-                
-                # Create a map of Symbol -> Name
                 bse_map = dict(zip(bse_csv[code_col].astype(str).str.strip(), bse_csv[name_col]))
-                
-                # Insert the Name column right after the symbol
                 df_sorted.insert(1, "Company Name", df_sorted["symbol"].map(bse_map).fillna("Unknown"))
             except Exception as e:
                 pass
@@ -257,7 +285,6 @@ if run_scan:
         df_ui = df_sorted.copy()
         cols = list(df_ui.columns)
         
-        # Clean up backend columns so they don't show on the screen
         if "raw_mcap" in df_ui.columns: df_ui = df_ui.drop(columns=["raw_mcap"])
         
         # TradingView Links
@@ -265,7 +292,6 @@ if run_scan:
         elif market_choice == "BSE Stocks": df_ui["symbol"] = "https://in.tradingview.com/chart/?symbol=BSE:" + df_ui["symbol"]
         else: df_ui["symbol"] = "https://www.tradingview.com/chart/?symbol=" + df_ui["symbol"]
 
-        # Reorder to put 'Market Cap' directly after 'symbol' or 'Company Name'
         if "Market Cap" in cols:
             cols.remove("Market Cap")
             insert_idx = cols.index("Company Name") + 1 if "Company Name" in cols else (cols.index("symbol") + 1 if "symbol" in cols else 0)
@@ -276,35 +302,42 @@ if run_scan:
             "symbol": st.column_config.LinkColumn("Symbol", display_text=r".*symbol=(?:NSE:|BSE:)?(.*)")
         }
 
-        st.success(f"Scan complete! Found {len(df_sorted)} candidates.")
-
-        tab1, tab2, tab3, tab4 = st.tabs(["🔥 Fresh Signals", "★ Buyable (7/7)", "◉ Watchlist (6/7)", "All Results"])
+        # ─── ORGANIZED RESULTS TABS ───
+        tab1, tab2, tab3, tab4 = st.tabs(["🔥 Fresh Signals", "★ Buyable (7/7)", "◉ Watchlist (6/7)", "📋 All Results"])
         
         with tab1:
-            st.subheader("Fresh Buy Signals (Latest Candle)")
-            st.dataframe(df_ui[df_ui["status"].isin(["🔥 FRESH BUY", "🔥 FRESH EXT"])], use_container_width=True, column_config=tv_config)
+            fresh_df = df_ui[df_ui["status"].isin(["🔥 FRESH BUY", "🔥 FRESH EXT"])]
+            if not fresh_df.empty: st.dataframe(fresh_df, use_container_width=True, column_config=tv_config, hide_index=True)
+            else: st.info("No fresh breakout signals detected this week.")
         with tab2:
-            st.subheader("Buyable (All 7 Gates Passed)")
-            st.dataframe(df_ui[df_ui["status"] == "★ BUYABLE (7/7)"], use_container_width=True, column_config=tv_config)
+            buyable_df = df_ui[df_ui["status"] == "★ BUYABLE (7/7)"]
+            if not buyable_df.empty: st.dataframe(buyable_df, use_container_width=True, column_config=tv_config, hide_index=True)
+            else: st.info("No stocks passed all 7 criteria.")
         with tab3:
-            st.subheader("Watchlist / Relaxed")
-            st.dataframe(df_ui[df_ui["status"].isin(["★ RELAXED (6/7)", "◉ WATCHLIST (6/7)"])], use_container_width=True, column_config=tv_config)
+            watch_df = df_ui[df_ui["status"].isin(["★ RELAXED (6/7)", "◉ WATCHLIST (6/7)"])]
+            if not watch_df.empty: st.dataframe(watch_df, use_container_width=True, column_config=tv_config, hide_index=True)
+            else: st.info("No watchlist candidates found.")
         with tab4:
-            st.subheader("Full Screener Output")
-            st.dataframe(df_ui, use_container_width=True, column_config=tv_config)
+            st.dataframe(df_ui, use_container_width=True, column_config=tv_config, hide_index=True)
         
+        st.write("") # Spacer
         if "raw_mcap" in df_sorted.columns: df_sorted = df_sorted.drop(columns=["raw_mcap"])
         
-        csv = df_sorted.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Download Full Results as CSV",
-            data=csv,
-            file_name=f"vpci_{market_flag.lower()}_results_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-            mime="text/csv",
-        )
+        # Centered Download Button
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            csv = df_sorted.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Full Results as CSV",
+                data=csv,
+                file_name=f"vpci_{market_flag.lower()}_results_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
     else:
-        st.warning("No stocks passed the screener criteria.")
+        st.warning("⚠️ No stocks passed the minimum screener criteria.")
         
     if failed:
-        with st.expander("View Failed Symbols"):
+        with st.expander("⚠️ View Failed / Excluded Symbols"):
+            st.write("These symbols were excluded due to insufficient trading history (< 42 weeks) or low volume.")
             st.write(", ".join(failed))
