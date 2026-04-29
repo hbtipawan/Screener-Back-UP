@@ -14,7 +14,7 @@ st.set_page_config(page_title="VPCI Screener Dashboard", layout="wide")
 st.title("Investor — Weekly Market Screener")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# LOCAL CSV FETCHERS (Bulletproof & Fast)
+# LOCAL CSV FETCHERS (Dynamic & Bulletproof)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data
@@ -27,7 +27,7 @@ def get_nse_stock_tickers():
         return [str(t).strip() for t in df["SYMBOL"].tolist()]
     except Exception as e:
         st.error(f"🚨 Missing or broken EQUITY_L_2.csv: {e}")
-        return ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK"]
+        return ["RELIANCE","TCS","HDFCBANK"]
 
 @st.cache_data
 def get_bse_stock_tickers():
@@ -40,52 +40,66 @@ def get_bse_stock_tickers():
         return [t for t in tickers if t.isdigit()]
     except Exception as e:
         st.error(f"🚨 Missing or broken bse_stocks.csv: {e}")
-        return ["500325", "532540", "500180", "500209", "532174"]
+        return ["500325", "532540", "500180"]
 
 @st.cache_data
 def fetch_us_symbols(min_price, min_mcap):
     try:
-        df = pd.read_csv("us_stocks.csv", encoding="latin-1", on_bad_lines="skip")
-        df.columns = df.columns.str.strip()
+        df = pd.read_csv("us_stocks.csv", on_bad_lines="skip")
+        df.columns = df.columns.str.strip().str.lower()
+        
+        # Dynamically find the right columns regardless of NASDAQ changes
+        sym_col = next((c for c in df.columns if 'symbol' in c), df.columns[0])
+        price_col = next((c for c in df.columns if 'sale' in c or 'price' in c or 'last' in c), None)
+        mcap_col = next((c for c in df.columns if 'cap' in c or 'market' in c), None)
+        
         symbols = []
         for _, row in df.iterrows():
-            sym = str(row.get("Symbol", "")).strip()
+            sym = str(row[sym_col]).strip()
             if not sym or "/" in sym or "^" in sym or len(sym) > 5 or sym.lower() == "nan": continue
             
-            try: price = float(str(row.get("Last Sale", row.get("LastSale", "0"))).replace("$", "").replace(",", ""))
-            except: price = 0
+            price = 0
+            if price_col:
+                try: price = float(str(row[price_col]).replace("$", "").replace(",", ""))
+                except: pass
                 
-            try:
-                mcap_str = str(row.get("Market Cap", row.get("MarketCap", "0"))).replace(",", "")
-                mcap = float(mcap_str) if mcap_str.strip() != "" and mcap_str.lower() != "nan" else 0
-            except: mcap = 0
+            mcap = 0
+            if mcap_col:
+                try: mcap = float(str(row[mcap_col]).replace(",", ""))
+                except: pass
                 
             if price >= min_price and mcap >= min_mcap:
                 symbols.append(sym)
         return symbols
     except Exception as e:
         st.error(f"🚨 Missing or broken us_stocks.csv: {e}")
-        return ["AAPL","MSFT","GOOGL","AMZN","NVDA"]
+        return ["AAPL","MSFT","GOOGL","AMZN"]
 
 @st.cache_data
 def fetch_etf_symbols(min_price):
     try:
-        df = pd.read_csv("us_etfs.csv", encoding="latin-1", on_bad_lines="skip")
-        df.columns = df.columns.str.strip()
+        df = pd.read_csv("us_etfs.csv", on_bad_lines="skip")
+        df.columns = df.columns.str.strip().str.lower()
+        
+        sym_col = next((c for c in df.columns if 'symbol' in c), df.columns[0])
+        price_col = next((c for c in df.columns if 'sale' in c or 'price' in c or 'last' in c), None)
+        
         symbols = []
         for _, row in df.iterrows():
-            sym = str(row.get("Symbol", "")).strip()
+            sym = str(row[sym_col]).strip()
             if not sym or "/" in sym or len(sym) > 6 or sym.lower() == "nan": continue
                 
-            try: price = float(str(row.get("Last Sale", row.get("LastSalePrice", "0"))).replace("$", "").replace(",", ""))
-            except: price = 0
+            price = 0
+            if price_col:
+                try: price = float(str(row[price_col]).replace("$", "").replace(",", ""))
+                except: pass
                 
             if price >= min_price:
                 symbols.append(sym)
         return symbols
     except Exception as e:
         st.error(f"🚨 Missing or broken us_etfs.csv: {e}")
-        return ["SPY","QQQ","IWM","DIA","VTI"]
+        return ["SPY","QQQ","IWM"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PROCESSING WORKER
@@ -217,22 +231,40 @@ if run_scan:
                 return f"${mcap / 1e6:.1f}M"
 
         df_sorted["Market Cap"] = df_sorted["raw_mcap"].apply(format_mcap)
+        
+        # ─── INJECT BSE COMPANY NAMES ───
+        if market_flag == "BSE":
+            try:
+                bse_csv = pd.read_csv("bse_stocks.csv")
+                name_col = "Scrip Name" if "Scrip Name" in bse_csv.columns else bse_csv.columns[2]
+                code_col = "Scrip Code" if "Scrip Code" in bse_csv.columns else bse_csv.columns[0]
+                
+                # Create a map of Symbol -> Name
+                bse_map = dict(zip(bse_csv[code_col].astype(str).str.strip(), bse_csv[name_col]))
+                
+                # Insert the Name column right after the symbol
+                df_sorted.insert(1, "Company Name", df_sorted["symbol"].map(bse_map).fillna("Unknown"))
+            except Exception as e:
+                pass
 
         # UI COPY & FORMATTING
         df_ui = df_sorted.copy()
         cols = list(df_ui.columns)
-        if "Market Cap" in cols:
-            cols.remove("Market Cap")
-            symbol_idx = cols.index("symbol") if "symbol" in cols else 0
-            cols.insert(symbol_idx + 1, "Market Cap")
-            df_ui = df_ui[cols]
-            
+        
+        # Clean up backend columns so they don't show on the screen
         if "raw_mcap" in df_ui.columns: df_ui = df_ui.drop(columns=["raw_mcap"])
         
         # TradingView Links
         if market_choice == "NSE Stocks": df_ui["symbol"] = "https://in.tradingview.com/chart/?symbol=NSE:" + df_ui["symbol"]
         elif market_choice == "BSE Stocks": df_ui["symbol"] = "https://in.tradingview.com/chart/?symbol=BSE:" + df_ui["symbol"]
         else: df_ui["symbol"] = "https://www.tradingview.com/chart/?symbol=" + df_ui["symbol"]
+
+        # Reorder to put 'Market Cap' directly after 'symbol' or 'Company Name'
+        if "Market Cap" in cols:
+            cols.remove("Market Cap")
+            insert_idx = cols.index("Company Name") + 1 if "Company Name" in cols else (cols.index("symbol") + 1 if "symbol" in cols else 0)
+            cols.insert(insert_idx, "Market Cap")
+            df_ui = df_ui[[c for c in cols if c in df_ui.columns]]
 
         tv_config = {
             "symbol": st.column_config.LinkColumn("Symbol", display_text=r".*symbol=(?:NSE:|BSE:)?(.*)")
