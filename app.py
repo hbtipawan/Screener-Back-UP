@@ -14,7 +14,7 @@ st.set_page_config(page_title="Pawan Chaturvedi Screener", page_icon="📈", lay
 # ─── PROFESSIONAL HEADER ───
 st.markdown("""
 <div style='text-align: center; padding-top: 10px; padding-bottom: 20px;'>
-    <h1 style='font-size: 3em; margin-bottom: 0px;'>📈 Pawan Chaturvedi Screener</h1>
+    <h1 style='font-size: 3em; margin-bottom: 0px;'>📈 Pawan's Screener</h1>
     <p style='color: #888888; font-size: 1.2em;'>Advanced Momentum & Breakout Analysis System</p>
 </div>
 """, unsafe_allow_html=True)
@@ -303,7 +303,9 @@ if run_scan:
         }
 
         # ─── ORGANIZED RESULTS TABS ───
-        tab1, tab2, tab3, tab4 = st.tabs(["🔥 Fresh Signals", "★ Buyable (7/7)", "◉ Watchlist (6/7)", "📋 All Results"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "🔥 Fresh Signals", "★ Buyable (7/7)", "◉ Watchlist (6/7)", 
+    "All Results", "🏆 Top 5 Ranked"])
         
         with tab1:
             fresh_df = df_ui[df_ui["status"].isin(["🔥 FRESH BUY", "🔥 FRESH EXT"])]
@@ -322,7 +324,29 @@ if run_scan:
         
         st.write("") # Spacer
         if "raw_mcap" in df_sorted.columns: df_sorted = df_sorted.drop(columns=["raw_mcap"])
-        
+        with tab5:
+    st.subheader("Top 5 Ranked Buyable Candidates")
+    st.caption("Composite score: VPCI 25% + RS 25% + 52wH 20% + Tight base 15% + Volume 10% + Mcap fit 5%")
+    
+    ranked = rank_stocks(df_sorted, include_relaxed=False)
+    if len(ranked) > 0:
+        display_cols = ["rank", "symbol", "close", "composite_score",
+                        "score_vpci", "score_rs", "score_52w", 
+                        "score_tight", "score_vol", "score_mcap", "status"]
+        display_cols = [c for c in display_cols if c in ranked.columns]
+        st.dataframe(
+            ranked[display_cols].head(10).style.format({
+                "composite_score": "{:.3f}",
+                "score_vpci": "{:.2f}", "score_rs": "{:.2f}",
+                "score_52w": "{:.2f}", "score_tight": "{:.2f}",
+                "score_vol": "{:.2f}", "score_mcap": "{:.2f}",
+                "close": "{:.2f}",
+            }),
+            use_container_width=True
+        )
+        st.info(f"Pool size: {len(ranked)} 7/7 passers ranked. Top 5 typically have score > 0.80.")
+    else:
+        st.warning("No 7/7 stocks to rank this week.")
         # Centered Download Button
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
