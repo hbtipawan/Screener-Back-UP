@@ -7,7 +7,90 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from vpci_engine import fetch_weekly_data, analyze_stock_v3, DEFAULT_PARAMS
 
 warnings.filterwarnings("ignore")
-
+import re
+import numpy as np
+ 
+ 
+def parse_mcap_to_crore(mcap_str):
+    """Parse '386K crore inr' or '854 crore inr' or 'N/A' to crore float."""
+    if pd.isna(mcap_str) or mcap_str == "N/A" or not str(mcap_str).strip():
+        return np.nan
+    s = str(mcap_str).lower().replace("crore inr", "").replace("inr", "").strip()
+    m = re.match(r"([\d.]+)\s*k", s)
+    if m:
+        return float(m.group(1)) * 1000
+    m = re.match(r"([\d.]+)", s)
+    if m:
+        return float(m.group(1))
+    return np.nan
+ 
+ 
+def mcap_score(crore):
+    """Sweet spot: 5,000 - 15,000 cr. Decays outside this band."""
+    if pd.isna(crore) or crore <= 0:
+        return 0.5
+    if 5000 <= crore <= 15000:
+        return 1.0
+    if 2000 <= crore < 5000:
+        return 0.6 + 0.4 * (crore - 2000) / 3000
+    if 15000 < crore <= 30000:
+        return 1.0 - 0.4 * (crore - 15000) / 15000
+    if 1000 <= crore < 2000:
+        return 0.3 + 0.3 * (crore - 1000) / 1000
+    if 30000 < crore <= 100000:
+        return 0.6 - 0.6 * (crore - 30000) / 70000
+    return 0.0
+ 
+ 
+def rank_stocks(df, include_relaxed=False, min_gates=7):
+    """Rank stocks already passing the gates by composite score."""
+    if include_relaxed:
+        mask = (df["full_entry"] == True) | (df["relaxed_entry"] == True) | (df["gate_count"] >= min_gates)
+    else:
+        mask = df["full_entry"] == True
+ 
+    pool = df[mask].copy().reset_index(drop=True)
+ 
+    if len(pool) == 0:
+        return pool
+ 
+    pool["score_vpci"] = pool["vpci"].rank(pct=True)
+    pool["score_rs"] = pool["rs_return"].rank(pct=True)
+    pool["score_52w"] = (pool["pct_near_52w"].clip(0, 100) / 100.0)
+    pool["score_tight"] = 1.0 - pool["risk_pct"].rank(pct=True)
+ 
+    if "vol_ratio" in pool.columns:
+        pool["score_vol"] = pool["vol_ratio"].rank(pct=True)
+    else:
+        pool["score_vol"] = 0.5
+ 
+    pool["mcap_crore"] = pool["Market Cap"].apply(parse_mcap_to_crore)
+    pool["score_mcap"] = pool["mcap_crore"].apply(mcap_score)
+ 
+    weights = {
+        "score_vpci":  0.25,
+        "score_rs":    0.25,
+        "score_52w":   0.20,
+        "score_tight": 0.15,
+        "score_vol":   0.10,
+        "score_mcap":  0.05,
+    }
+ 
+    pool["composite_score"] = sum(pool[col] * w for col, w in weights.items())
+ 
+    if "fresh_signal" in pool.columns:
+        pool.loc[pool["fresh_signal"] == True, "composite_score"] *= 1.05
+ 
+    pool = pool.sort_values("composite_score", ascending=False).reset_index(drop=True)
+    pool["rank"] = pool.index + 1
+ 
+    return pool
+ 
+ 
+# ═══════════════════════════════════════════════════════════════════════════════
+# END OF INLINE BLOCK
+# Continue with your existing app.py code below this line (st.set_page_config etc.)
+# ═══════════════════════════════════════════════════════════════════════════════
 # ─── PAGE CONFIGURATION ───
 st.set_page_config(page_title="Pawan Chaturvedi Screener", page_icon="📈", layout="wide")
 
