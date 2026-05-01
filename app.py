@@ -388,7 +388,7 @@ if run_scan:
         # ─── ORGANIZED RESULTS TABS ───
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🔥 Fresh Signals", "★ Buyable (7/7)", "◉ Watchlist (6/7)", 
-    "All Results", "🏆 Top 5 Ranked"])
+    "All Results", "🏆 Top Ranked"])
         
         with tab1:
             fresh_df = df_ui[df_ui["status"].isin(["🔥 FRESH BUY", "🔥 FRESH EXT"])]
@@ -426,7 +426,7 @@ if run_scan:
             display_cols = [c for c in display_cols if c in ranked.columns]
  
             st.dataframe(
-                ranked[display_cols].head(10).style.format({
+                ranked[display_cols].style.format({
                     "composite_score": "{:.3f}",
                     "score_vpci": "{:.2f}",
                     "score_rs": "{:.2f}",
