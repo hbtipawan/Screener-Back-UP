@@ -325,7 +325,7 @@ if run_scan:
         st.write("") # Spacer
         if "raw_mcap" in df_sorted.columns: df_sorted = df_sorted.drop(columns=["raw_mcap"])
         with tab5:
-        st.subheader("Top Ranked Buyable Candidates")
+                st.subheader("Top Ranked Buyable Candidates")
         st.caption("Composite score: VPCI 25% + RS 25% + 52wH 20% + Tight base 15% + Volume 10% + Mcap fit 5%")
  
         try:
