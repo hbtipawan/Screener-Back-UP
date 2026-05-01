@@ -5,7 +5,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from vpci_engine import fetch_weekly_data, analyze_stock_v3, DEFAULT_PARAMS
-from vpci_ranker import rank_stocks
+
 warnings.filterwarnings("ignore")
 
 # ─── PAGE CONFIGURATION ───
