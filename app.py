@@ -528,7 +528,7 @@ if run_scan:
                 else:
                     st.warning("No 7/7 stocks to rank this week. Try the Watchlist tab for 6/7 candidates.")
  
-            with tab6:
+        with tab6:
                 st.subheader("🎯 G4 Pending Watchlist — Pre-Breakout Candidates")
                 st.caption(
                     "Stocks passing 6 of 7 gates where ONLY G4 (13-week breakout) is missing. "
