@@ -85,7 +85,67 @@ def rank_stocks(df, include_relaxed=False, min_gates=7):
     pool["rank"] = pool.index + 1
  
     return pool
- 
+def rank_g4_pending(df):
+    """
+    Rank stocks where gate_count == 6 and ONLY G4 (breakout) is the missing gate.
+    All 6 other gates (G1, G2, G3, G5, G6, G7) must be True.
+    These are pre-breakout high-conviction watchlist candidates.
+    """
+    required_cols = ["gate_count", "g1", "g2", "g3", "g4", "g5", "g6", "g7"]
+    for c in required_cols:
+        if c not in df.columns:
+            return pd.DataFrame()
+
+    mask = (
+        (df["gate_count"] == 6) &
+        (df["g1"] == True) &
+        (df["g2"] == True) &
+        (df["g3"] == True) &
+        (df["g4"] == False) &
+        (df["g5"] == True) &
+        (df["g6"] == True) &
+        (df["g7"] == True)
+    )
+
+    pool = df[mask].copy().reset_index(drop=True)
+
+    if len(pool) == 0:
+        return pool
+
+    pool["score_vpci"] = pool["vpci"].rank(pct=True)
+    pool["score_rs"] = pool["rs_return"].rank(pct=True)
+    pool["score_52w"] = (pool["pct_near_52w"].clip(0, 100) / 100.0)
+    pool["score_tight"] = 1.0 - pool["risk_pct"].rank(pct=True)
+
+    if "vol_ratio" in pool.columns:
+        pool["score_vol"] = pool["vol_ratio"].rank(pct=True)
+    else:
+        pool["score_vol"] = 0.5
+
+    pool["mcap_crore"] = pool["Market Cap"].apply(parse_mcap_to_crore)
+    pool["score_mcap"] = pool["mcap_crore"].apply(mcap_score)
+
+    if "pct_near_52w" in pool.columns:
+        pool["score_proximity"] = pool["pct_near_52w"].clip(0, 100) / 100.0
+    else:
+        pool["score_proximity"] = 0.5
+
+    weights = {
+        "score_vpci":      0.20,
+        "score_rs":        0.20,
+        "score_52w":       0.15,
+        "score_tight":     0.15,
+        "score_vol":       0.10,
+        "score_mcap":      0.05,
+        "score_proximity": 0.15,
+    }
+
+    pool["composite_score"] = sum(pool[col] * w for col, w in weights.items())
+    pool = pool.sort_values("composite_score", ascending=False).reset_index(drop=True)
+    pool["rank"] = pool.index + 1
+
+    return pool
+
  
 # ═══════════════════════════════════════════════════════════════════════════════
 # END OF INLINE BLOCK
