@@ -446,7 +446,7 @@ if run_scan:
         }
 
         # ─── ORGANIZED RESULTS TABS ───
-     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🔥 Fresh Signals", "★ Buyable (7/7)", "◉ Watchlist (6/7)", "All Results", "🏆 Top 5 Ranked", "🎯 G4 Pending"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🔥 Fresh Signals", "★ Buyable (7/7)", "◉ Watchlist (6/7)", "All Results", "🏆 Top 5 Ranked", "🎯 G4 Pending"])
         
         with tab1:
             fresh_df = df_ui[df_ui["status"].isin(["🔥 FRESH BUY", "🔥 FRESH EXT"])]
