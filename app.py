@@ -466,59 +466,69 @@ if run_scan:
         st.write("") # Spacer
         if "raw_mcap" in df_sorted.columns: df_sorted = df_sorted.drop(columns=["raw_mcap"])
         with tab5:
-                st.subheader("Top Ranked Buyable Candidates")
-        st.caption("Composite score: VPCI 25% + RS 25% + 52wH 20% + Tight base 15% + Volume 10% + Mcap fit 5%")
+                st.subheader("All Ranked Buyable Candidates")
+                st.caption("Composite score: VPCI 25% + RS 25% + 52wH 20% + Tight base 15% + Volume 10% + Mcap fit 5%")
  
-        try:
-            ranked = rank_stocks(df_sorted, include_relaxed=False)
-        except Exception as e:
-            st.error(f"Ranker error: {e}")
-            ranked = pd.DataFrame()
+                try:
+                    ranked = rank_stocks(df_sorted, include_relaxed=False)
+                except Exception as e:
+                    st.error(f"Ranker error: {e}")
+                    ranked = pd.DataFrame()
  
-        if len(ranked) > 0:
-            display_cols = [
-                "rank", "symbol", "close", "composite_score",
-                "score_vpci", "score_rs", "score_52w",
-                "score_tight", "score_vol", "score_mcap", "status"
-            ]
-            display_cols = [c for c in display_cols if c in ranked.columns]
+                if len(ranked) > 0:
+                    # Build display copy with clickable symbols
+                    ranked_ui = ranked.copy()
+                    if market_choice == "NSE Stocks":
+                        ranked_ui["symbol"] = "https://in.tradingview.com/chart/?symbol=NSE:" + ranked_ui["symbol"]
+                    elif market_choice == "BSE Stocks":
+                        ranked_ui["symbol"] = "https://in.tradingview.com/chart/?symbol=BSE:" + ranked_ui["symbol"]
+                    else:
+                        ranked_ui["symbol"] = "https://www.tradingview.com/chart/?symbol=" + ranked_ui["symbol"]
  
-            st.dataframe(
-                ranked[display_cols].style.format({
-                    "composite_score": "{:.3f}",
-                    "score_vpci": "{:.2f}",
-                    "score_rs": "{:.2f}",
-                    "score_52w": "{:.2f}",
-                    "score_tight": "{:.2f}",
-                    "score_vol": "{:.2f}",
-                    "score_mcap": "{:.2f}",
-                    "close": "{:.2f}",
-                }),
-                use_container_width=True
-            )
-            st.info(f"Pool size: {len(ranked)} stocks ranked. Top 5 typically have score > 0.80.")
-        else:
-            st.warning("No 7/7 stocks to rank this week. Try the Watchlist tab for 6/7 candidates.")
+                    display_cols = [
+                        "rank", "symbol", "Market Cap", "close", "composite_score",
+                        "score_vpci", "score_rs", "score_52w",
+                        "score_tight", "score_vol", "score_mcap", "status"
+                    ]
+                    display_cols = [c for c in display_cols if c in ranked_ui.columns]
  
-        # Centered Download Button
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            csv = df_sorted.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Download Full Results as CSV",
-                data=csv,
-                file_name=f"vpci_{market_flag.lower()}_results_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-    else:
-        st.warning("⚠️ No stocks passed the minimum screener criteria.")
-        
-    if failed:
-        with st.expander("⚠️ View Failed / Excluded Symbols"):
-            st.write("These symbols were excluded due to insufficient trading history (< 42 weeks) or low volume.")
-            st.write(", ".join(failed))
-        with tab6:
+                    st.dataframe(
+                        ranked_ui[display_cols].style.format({
+                            "composite_score": "{:.3f}",
+                            "score_vpci": "{:.2f}",
+                            "score_rs": "{:.2f}",
+                            "score_52w": "{:.2f}",
+                            "score_tight": "{:.2f}",
+                            "score_vol": "{:.2f}",
+                            "score_mcap": "{:.2f}",
+                            "close": "{:.2f}",
+                        }),
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config=tv_config
+                    )
+ 
+                    st.info(
+                        f"Total ranked: {len(ranked)} stocks. "
+                        f"Top 5 typically have score > 0.80. "
+                        f"Click any symbol to open in TradingView."
+                    )
+ 
+                    # Download CSV (use original ranked df with plain symbols, not URLs)
+                    download_cols = [c for c in display_cols if c != "symbol"] + ["symbol"]
+                    download_cols = [c for c in download_cols if c in ranked.columns]
+                    ranked_csv = ranked[display_cols].to_csv(index=False).encode('utf-8') if all(c in ranked.columns for c in display_cols) else ranked.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download Ranked CSV",
+                        data=ranked_csv,
+                        file_name=f"vpci_ranked_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                        mime="text/csv",
+                        key="ranked_download"
+                    )
+                else:
+                    st.warning("No 7/7 stocks to rank this week. Try the Watchlist tab for 6/7 candidates.")
+ 
+            with tab6:
                 st.subheader("🎯 G4 Pending Watchlist — Pre-Breakout Candidates")
                 st.caption(
                     "Stocks passing 6 of 7 gates where ONLY G4 (13-week breakout) is missing. "
@@ -533,16 +543,25 @@ if run_scan:
                     g4_pending = pd.DataFrame()
  
                 if len(g4_pending) > 0:
+                    # Build display copy with clickable symbols
+                    g4_ui = g4_pending.copy()
+                    if market_choice == "NSE Stocks":
+                        g4_ui["symbol"] = "https://in.tradingview.com/chart/?symbol=NSE:" + g4_ui["symbol"]
+                    elif market_choice == "BSE Stocks":
+                        g4_ui["symbol"] = "https://in.tradingview.com/chart/?symbol=BSE:" + g4_ui["symbol"]
+                    else:
+                        g4_ui["symbol"] = "https://www.tradingview.com/chart/?symbol=" + g4_ui["symbol"]
+ 
                     g4_display_cols = [
-                        "rank", "symbol", "close", "composite_score",
+                        "rank", "symbol", "Market Cap", "close", "composite_score",
                         "score_vpci", "score_rs", "score_52w",
                         "score_tight", "score_vol", "score_mcap", "score_proximity",
                         "status"
                     ]
-                    g4_display_cols = [c for c in g4_display_cols if c in g4_pending.columns]
+                    g4_display_cols = [c for c in g4_display_cols if c in g4_ui.columns]
  
                     st.dataframe(
-                        g4_pending[g4_display_cols].style.format({
+                        g4_ui[g4_display_cols].style.format({
                             "composite_score": "{:.3f}",
                             "score_vpci": "{:.2f}",
                             "score_rs": "{:.2f}",
@@ -554,16 +573,16 @@ if run_scan:
                             "close": "{:.2f}",
                         }),
                         use_container_width=True,
-                        hide_index=True
+                        hide_index=True,
+                        column_config=tv_config
                     )
  
                     st.info(
                         f"Total G4-pending: {len(g4_pending)} stocks. "
-                        f"Track these on daily chart — when close > 13w high, G4 fires "
-                        f"and they migrate to the Buyable (7/7) tab."
+                        f"Click any symbol to open chart and watch for breakout above 13w high."
                     )
  
-                    g4_csv = g4_pending[g4_display_cols].to_csv(index=False).encode('utf-8')
+                    g4_csv = g4_pending[g4_display_cols].to_csv(index=False).encode('utf-8') if all(c in g4_pending.columns for c in g4_display_cols) else g4_pending.to_csv(index=False).encode('utf-8')
                     st.download_button(
                         label="📥 Download G4 Pending CSV",
                         data=g4_csv,
@@ -576,4 +595,5 @@ if run_scan:
                         "No stocks meet the strict G4-pending criteria this week "
                         "(all 6 other gates passing, only G4 missing)."
                     )
+ 
  
