@@ -446,9 +446,7 @@ if run_scan:
         }
 
         # ─── ORGANIZED RESULTS TABS ───
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🔥 Fresh Signals", "★ Buyable (7/7)", "◉ Watchlist (6/7)", 
-    "All Results", "🏆 Top Ranked"])
+       tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🔥 Fresh Signals", "★ Buyable (7/7)", "◉ Watchlist (6/7)", "All Results", "🏆 Top 5 Ranked", "🎯 G4 Pending"])
         
         with tab1:
             fresh_df = df_ui[df_ui["status"].isin(["🔥 FRESH BUY", "🔥 FRESH EXT"])]
@@ -520,3 +518,62 @@ if run_scan:
         with st.expander("⚠️ View Failed / Excluded Symbols"):
             st.write("These symbols were excluded due to insufficient trading history (< 42 weeks) or low volume.")
             st.write(", ".join(failed))
+        with tab6:
+                st.subheader("🎯 G4 Pending Watchlist — Pre-Breakout Candidates")
+                st.caption(
+                    "Stocks passing 6 of 7 gates where ONLY G4 (13-week breakout) is missing. "
+                    "All trend, accumulation, and RS gates already firing. "
+                    "Buy these when G4 fires next week."
+                )
+ 
+                try:
+                    g4_pending = rank_g4_pending(df_sorted)
+                except Exception as e:
+                    st.error(f"G4 ranker error: {e}")
+                    g4_pending = pd.DataFrame()
+ 
+                if len(g4_pending) > 0:
+                    g4_display_cols = [
+                        "rank", "symbol", "close", "composite_score",
+                        "score_vpci", "score_rs", "score_52w",
+                        "score_tight", "score_vol", "score_mcap", "score_proximity",
+                        "status"
+                    ]
+                    g4_display_cols = [c for c in g4_display_cols if c in g4_pending.columns]
+ 
+                    st.dataframe(
+                        g4_pending[g4_display_cols].style.format({
+                            "composite_score": "{:.3f}",
+                            "score_vpci": "{:.2f}",
+                            "score_rs": "{:.2f}",
+                            "score_52w": "{:.2f}",
+                            "score_tight": "{:.2f}",
+                            "score_vol": "{:.2f}",
+                            "score_mcap": "{:.2f}",
+                            "score_proximity": "{:.2f}",
+                            "close": "{:.2f}",
+                        }),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+ 
+                    st.info(
+                        f"Total G4-pending: {len(g4_pending)} stocks. "
+                        f"Track these on daily chart — when close > 13w high, G4 fires "
+                        f"and they migrate to the Buyable (7/7) tab."
+                    )
+ 
+                    g4_csv = g4_pending[g4_display_cols].to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download G4 Pending CSV",
+                        data=g4_csv,
+                        file_name=f"vpci_g4_pending_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                        mime="text/csv",
+                        key="g4_pending_download"
+                    )
+                else:
+                    st.warning(
+                        "No stocks meet the strict G4-pending criteria this week "
+                        "(all 6 other gates passing, only G4 missing)."
+                    )
+ 
