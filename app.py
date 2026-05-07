@@ -13,7 +13,7 @@ from earnings_phase import (
     position_size_multiplier, phase_priority, phase_label,
     phase_emoji, format_phase_days, to_yf_symbol,
     PHASE_PRIORITY,
-    reset_diagnostics, get_diagnostics,
+    reset_diagnostics, get_diagnostics, prewarm_nse_cache,
 )
 from datetime import date as _date
  
@@ -441,10 +441,20 @@ if run_scan:
         # ═══════════════════════════════════════════════════════════════════════
         if enable_phase:
             reset_diagnostics()    # zero counters for this run
+ 
+            # ── Pre-warm NSE bulk caches in ONE call before per-symbol loop ──
+            with st.spinner("📅 Loading NSE earnings calendar (one-time per day)..."):
+                past_n, upcoming_n, prewarm_err = prewarm_nse_cache()
+            if prewarm_err:
+                st.warning(f"NSE API issue: {prewarm_err}. Falling back to yfinance per-symbol.")
+            elif past_n > 0:
+                st.success(f"📅 NSE calendar loaded: {past_n} stocks with past results, "
+                           f"{upcoming_n} with upcoming results.")
+ 
             phase_targets = df_sorted[df_sorted["gate_count"] >= 5]["symbol"].tolist()
             phase_dict = {}
             if phase_targets:
-                with st.spinner(f"📅 Fetching earnings calendar for {len(phase_targets)} candidates..."):
+                with st.spinner(f"📅 Classifying earnings phase for {len(phase_targets)} candidates..."):
                     with ThreadPoolExecutor(max_workers=8) as executor:
                         ph_futs = [executor.submit(enrich_with_phase, s, market_flag)
                                    for s in phase_targets]
@@ -486,65 +496,68 @@ if run_scan:
                         emj = phase_emoji(p)
                         st.metric(f"{emj} {p.replace('_',' ')}", cnt)
  
-                # ─── v4.2 — Diagnostics panel (always show; helps debug Yahoo blockage) ───
+                # ─── v4.3 — Diagnostics panel (NSE-API source) ───
                 diag = get_diagnostics()
-                total_attempted = sum([diag["tier1_ok"], diag["tier1_empty"],
-                                      diag["tier1_ratelimited"], diag["tier1_error"],
-                                      diag["tier2_ok"], diag["tier3_manual"],
+                total_attempted = sum([diag["tier1_nse_resolved"],
+                                      diag["tier2_nse_upcoming"],
+                                      diag["tier3_csv_override"],
+                                      diag["tier4_yfinance"],
                                       diag["total_unknown"]])
-                ok = diag["tier1_ok"] + diag["tier2_ok"] + diag["tier3_manual"]
+                ok = (diag["tier1_nse_resolved"] + diag["tier3_csv_override"]
+                      + diag["tier4_yfinance"])
  
                 if total_attempted > 0:
                     success_rate = ok / total_attempted * 100
                     with st.expander(
                         f"🔍 Earnings fetch diagnostics — {ok}/{total_attempted} resolved "
                         f"({success_rate:.0f}%)",
-                        expanded=(success_rate < 50)  # auto-open if mostly failed
+                        expanded=(success_rate < 50)
                     ):
                         d1, d2, d3 = st.columns(3)
                         with d1:
-                            st.markdown("**Tier 1 — Full history**")
-                            st.write(f"✅ OK: {diag['tier1_ok']}")
-                            st.write(f"⚠ Empty: {diag['tier1_empty']}")
-                            st.write(f"🚫 Rate-limited: {diag['tier1_ratelimited']}")
-                            st.write(f"❌ Error: {diag['tier1_error']}")
+                            st.markdown("**Tier 1 — NSE past results**")
+                            st.write(f"✅ Resolved: {diag['tier1_nse_resolved']}")
+                            st.markdown("**Tier 2 — NSE upcoming**")
+                            st.write(f"✅ Found: {diag['tier2_nse_upcoming']}")
                         with d2:
-                            st.markdown("**Tier 2 — Calendar fallback**")
-                            st.write(f"✅ OK: {diag['tier2_ok']}")
-                            st.write(f"❌ Error: {diag['tier2_error']}")
                             st.markdown("**Tier 3 — Manual CSV**")
-                            st.write(f"✅ Used: {diag['tier3_manual']}")
+                            st.write(f"✅ Used: {diag['tier3_csv_override']}")
+                            st.markdown("**Tier 4 — yfinance fallback**")
+                            st.write(f"✅ Resolved: {diag['tier4_yfinance']}")
                         with d3:
                             st.markdown("**Unresolved**")
                             st.write(f"⚫ Unknown: {diag['total_unknown']}")
+                            if diag.get("nse_api_error"):
+                                st.markdown("**NSE API error**")
+                                st.error(diag["nse_api_error"])
  
-                        # Actionable guidance based on what failed
-                        if diag["tier1_ratelimited"] >= 10:
-                            st.error(
-                                "🚫 **Yahoo Finance is rate-limiting earnings calls from "
-                                "Streamlit Cloud.** This is a known cloud-IP issue. "
-                                "Solutions:\n\n"
-                                "1. **Best fix:** Add `earnings_overrides.csv` to your repo "
-                                "with manually maintained earnings dates for your top 50-100 "
-                                "watchlist stocks. Format:\n\n"
-                                "```\nsymbol,last_result,next_result\n"
-                                "RELIANCE,2026-04-24,2026-07-17\n"
-                                "TCS,2026-04-09,2026-07-09\n```\n\n"
-                                "2. **Workaround:** Run the screener locally where IP isn't "
-                                "rate-limited.\n\n"
-                                "3. **Disable phase tagging** in sidebar to revert to v3 behavior."
-                            )
-                        elif diag["tier1_empty"] >= 10 and diag["tier1_ok"] < 5:
-                            st.warning(
-                                "⚠ Most symbols returned no earnings data. This typically "
-                                "means Yahoo doesn't track earnings for these tickers (common "
-                                "for smaller NSE/BSE stocks). Try `earnings_overrides.csv` "
-                                "for your priority watchlist."
-                            )
-                        elif success_rate >= 80:
+                        if success_rate >= 90:
                             st.success(
-                                f"✅ Earnings data resolved for {success_rate:.0f}% of candidates. "
-                                f"Phase tagging is operating normally."
+                                f"✅ Excellent — NSE API resolved {success_rate:.0f}% of "
+                                f"candidates. Phase tagging is operating normally."
+                            )
+                        elif success_rate >= 70:
+                            st.info(
+                                f"Phase tagging resolved {success_rate:.0f}% of candidates. "
+                                f"For UNKNOWN symbols, add them to `earnings_overrides.csv` "
+                                f"if they appear in your real watchlist."
+                            )
+                        elif diag.get("nse_api_error"):
+                            st.error(
+                                f"🚫 NSE API is unreachable from this Streamlit deployment. "
+                                f"Error: {diag['nse_api_error']}.\n\n"
+                                "Falling back to yfinance (slow, rate-limited) and CSV. "
+                                "If NSE blocks Streamlit Cloud IPs, the CSV fallback is your "
+                                "best path — populate `earnings_overrides.csv` with your top "
+                                "watchlist."
+                            )
+                        else:
+                            st.warning(
+                                f"Low resolution rate ({success_rate:.0f}%). Many of your "
+                                f"signal candidates aren't in NSE's recent results feed. "
+                                f"Possible reasons: very small caps, recently listed, or "
+                                f"non-quarterly reporters. Add them to "
+                                f"`earnings_overrides.csv` if they're real watchlist items."
                             )
  
                 st.divider()
@@ -845,4 +858,3 @@ if run_scan:
                         "PRE_AVOID. Skip POST_FADING unless extra confluence (sector momentum, "
                         "fresh 52w high) is present."
                     )
- 
