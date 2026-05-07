@@ -858,3 +858,4 @@ if run_scan:
                         "PRE_AVOID. Skip POST_FADING unless extra confluence (sector momentum, "
                         "fresh 52w high) is present."
                     )
+ 
