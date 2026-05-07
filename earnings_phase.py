@@ -330,4 +330,3 @@ def prewarm_nse_cache():
         return len(past), len(upcoming), DIAGNOSTICS.get("nse_api_error")
     except Exception as e:
         return 0, 0, f"prewarm failed: {e}"
- 
