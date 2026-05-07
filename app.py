@@ -13,6 +13,7 @@ from earnings_phase import (
     position_size_multiplier, phase_priority, phase_label,
     phase_emoji, format_phase_days, to_yf_symbol,
     PHASE_PRIORITY,
+    reset_diagnostics, get_diagnostics,
 )
 from datetime import date as _date
  
@@ -439,6 +440,7 @@ if run_scan:
         # v4 ADDITION — Enrich high-priority signals with earnings phase
         # ═══════════════════════════════════════════════════════════════════════
         if enable_phase:
+            reset_diagnostics()    # zero counters for this run
             phase_targets = df_sorted[df_sorted["gate_count"] >= 5]["symbol"].tolist()
             phase_dict = {}
             if phase_targets:
@@ -475,14 +477,76 @@ if run_scan:
             if "phase" in df_sorted.columns and len(df_sorted) > 0:
                 st.markdown("### 📅 Earnings Phase Distribution")
                 phase_counts = df_sorted[df_sorted["gate_count"] >= 5]["phase"].value_counts().to_dict()
-                pcols = st.columns(7)
+                pcols = st.columns(8)   # 8 columns now (added UNKNOWN at end)
                 phase_order = ["POST_SWEET","POST_HOT","PRE_HOT","STANDARD",
-                              "PRE_IMMINENT","POST_FADING","PRE_AVOID"]
+                              "PRE_IMMINENT","POST_FADING","PRE_AVOID","UNKNOWN"]
                 for i, p in enumerate(phase_order):
                     with pcols[i]:
                         cnt = phase_counts.get(p, 0)
                         emj = phase_emoji(p)
                         st.metric(f"{emj} {p.replace('_',' ')}", cnt)
+ 
+                # ─── v4.2 — Diagnostics panel (always show; helps debug Yahoo blockage) ───
+                diag = get_diagnostics()
+                total_attempted = sum([diag["tier1_ok"], diag["tier1_empty"],
+                                      diag["tier1_ratelimited"], diag["tier1_error"],
+                                      diag["tier2_ok"], diag["tier3_manual"],
+                                      diag["total_unknown"]])
+                ok = diag["tier1_ok"] + diag["tier2_ok"] + diag["tier3_manual"]
+ 
+                if total_attempted > 0:
+                    success_rate = ok / total_attempted * 100
+                    with st.expander(
+                        f"🔍 Earnings fetch diagnostics — {ok}/{total_attempted} resolved "
+                        f"({success_rate:.0f}%)",
+                        expanded=(success_rate < 50)  # auto-open if mostly failed
+                    ):
+                        d1, d2, d3 = st.columns(3)
+                        with d1:
+                            st.markdown("**Tier 1 — Full history**")
+                            st.write(f"✅ OK: {diag['tier1_ok']}")
+                            st.write(f"⚠ Empty: {diag['tier1_empty']}")
+                            st.write(f"🚫 Rate-limited: {diag['tier1_ratelimited']}")
+                            st.write(f"❌ Error: {diag['tier1_error']}")
+                        with d2:
+                            st.markdown("**Tier 2 — Calendar fallback**")
+                            st.write(f"✅ OK: {diag['tier2_ok']}")
+                            st.write(f"❌ Error: {diag['tier2_error']}")
+                            st.markdown("**Tier 3 — Manual CSV**")
+                            st.write(f"✅ Used: {diag['tier3_manual']}")
+                        with d3:
+                            st.markdown("**Unresolved**")
+                            st.write(f"⚫ Unknown: {diag['total_unknown']}")
+ 
+                        # Actionable guidance based on what failed
+                        if diag["tier1_ratelimited"] >= 10:
+                            st.error(
+                                "🚫 **Yahoo Finance is rate-limiting earnings calls from "
+                                "Streamlit Cloud.** This is a known cloud-IP issue. "
+                                "Solutions:\n\n"
+                                "1. **Best fix:** Add `earnings_overrides.csv` to your repo "
+                                "with manually maintained earnings dates for your top 50-100 "
+                                "watchlist stocks. Format:\n\n"
+                                "```\nsymbol,last_result,next_result\n"
+                                "RELIANCE,2026-04-24,2026-07-17\n"
+                                "TCS,2026-04-09,2026-07-09\n```\n\n"
+                                "2. **Workaround:** Run the screener locally where IP isn't "
+                                "rate-limited.\n\n"
+                                "3. **Disable phase tagging** in sidebar to revert to v3 behavior."
+                            )
+                        elif diag["tier1_empty"] >= 10 and diag["tier1_ok"] < 5:
+                            st.warning(
+                                "⚠ Most symbols returned no earnings data. This typically "
+                                "means Yahoo doesn't track earnings for these tickers (common "
+                                "for smaller NSE/BSE stocks). Try `earnings_overrides.csv` "
+                                "for your priority watchlist."
+                            )
+                        elif success_rate >= 80:
+                            st.success(
+                                f"✅ Earnings data resolved for {success_rate:.0f}% of candidates. "
+                                f"Phase tagging is operating normally."
+                            )
+ 
                 st.divider()
  
         # SMART MCAP FETCH
@@ -781,3 +845,4 @@ if run_scan:
                         "PRE_AVOID. Skip POST_FADING unless extra confluence (sector momentum, "
                         "fresh 52w high) is present."
                     )
+ 
