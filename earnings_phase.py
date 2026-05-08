@@ -37,12 +37,18 @@ import streamlit as st
 warnings.filterwarnings("ignore")
  
 # ─── Diagnostics counters ───────────────────────────────────────────────────
+# Keys named with new convention (v4.4). Old names (tier1_nse_resolved etc.)
+# kept as aliases for backward compatibility with v4.3 app.py.
 DIAGNOSTICS = {
-    "tier1_nse_past":     0,    # NSE past results (real-time)
-    "tier2_bse_past":     0,    # BSE past results (real-time)
-    "tier3_nse_upcoming": 0,    # NSE upcoming
-    "tier4_csv_override": 0,    # CSV
-    "tier5_yfinance":     0,    # yfinance fallback
+    "tier1_nse_past":     0,    # v4.4 name
+    "tier1_nse_resolved": 0,    # v4.3 alias — populated alongside tier1_nse_past
+    "tier2_bse_past":     0,    # NEW in v4.4
+    "tier2_nse_upcoming": 0,    # v4.3 alias for upcoming (kept for app.py compat)
+    "tier3_nse_upcoming": 0,    # v4.4 name
+    "tier3_csv_override": 0,    # alias used in v4.3
+    "tier4_csv_override": 0,    # v4.4 name
+    "tier4_yfinance":     0,    # v4.3 alias
+    "tier5_yfinance":     0,    # v4.4 name
     "total_unknown":      0,
     "nse_api_error":      None,
     "bse_api_error":      None,
@@ -299,6 +305,7 @@ def get_earnings_dates(symbol_or_yf):
     overrides = _load_manual_overrides()
     if plain in overrides:
         DIAGNOSTICS["tier4_csv_override"] += 1
+        DIAGNOSTICS["tier3_csv_override"] += 1   # alias for v4.3 app.py
         return overrides[plain]
  
     dates = []
@@ -308,6 +315,7 @@ def get_earnings_dates(symbol_or_yf):
     if plain in nse_past:
         dates.append(nse_past[plain])
         DIAGNOSTICS["tier1_nse_past"] += 1
+        DIAGNOSTICS["tier1_nse_resolved"] += 1   # alias for v4.3 app.py
  
     # Tier 2: BSE past (only if NSE missed it — avoid double-counting)
     if plain not in nse_past:
@@ -321,6 +329,7 @@ def get_earnings_dates(symbol_or_yf):
     if plain in nse_upcoming:
         dates.append(nse_upcoming[plain])
         DIAGNOSTICS["tier3_nse_upcoming"] += 1
+        DIAGNOSTICS["tier2_nse_upcoming"] += 1   # alias for v4.3 app.py
  
     if dates:
         return sorted(set(dates))
@@ -337,6 +346,7 @@ def get_earnings_dates(symbol_or_yf):
                 yf_dates.append(dt.date())
             if yf_dates:
                 DIAGNOSTICS["tier5_yfinance"] += 1
+                DIAGNOSTICS["tier4_yfinance"] += 1   # alias for v4.3 app.py
                 return sorted(set(yf_dates))
     except Exception:
         pass
