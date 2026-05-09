@@ -16,6 +16,15 @@ from earnings_phase import (
     reset_diagnostics, get_diagnostics, prewarm_nse_cache,
 )
 from datetime import date as _date
+
+# Sector / Industry leadership + checkpointing + history persistence
+from sector_history import (
+    load_sector_map, attach_sector_columns, build_sector_leadership,
+    save_weekly_snapshot, load_history_from_github, build_rotation_view,
+    init_checkpoint, save_checkpoint, clear_checkpoint,
+    checkpoint_to_json, restore_checkpoint_from_upload,
+    CHECKPOINT_EVERY,
+)
  
 warnings.filterwarnings("ignore")
 import re
@@ -207,15 +216,27 @@ st.divider()
 # ═══════════════════════════════════════════════════════════════════════════════
 @st.cache_data
 def get_nse_stock_tickers():
+    """
+    Load NSE symbols from EQUITY_L_2.csv. Supports both schemas:
+      • New: companyId, Name, Sector, Industry      (current upload)
+      • Legacy: SYMBOL, NAME OF COMPANY, SERIES...  (original NSE master)
+    """
     try:
         df = pd.read_csv("EQUITY_L_2.csv")
         df.columns = [str(c).strip().replace(" ", "_") for c in df.columns]
-        if "SERIES" in df.columns:
-            df = df[df["SERIES"] == "EQ"]
-        return [str(t).strip() for t in df["SYMBOL"].tolist()]
+        # Legacy schema — keep old SERIES filter behaviour
+        if "SYMBOL" in df.columns:
+            if "SERIES" in df.columns:
+                df = df[df["SERIES"] == "EQ"]
+            return [str(t).strip() for t in df["SYMBOL"].tolist()]
+        # New schema — companyId is the ticker
+        if "companyId" in df.columns:
+            return [str(t).strip() for t in df["companyId"].dropna().tolist()]
+        st.error("🚨 EQUITY_L_2.csv has no 'SYMBOL' or 'companyId' column.")
+        return ["RELIANCE", "TCS", "HDFCBANK"]
     except Exception as e:
         st.error(f"🚨 Missing or broken EQUITY_L_2.csv: {e}")
-        return ["RELIANCE","TCS","HDFCBANK"]
+        return ["RELIANCE", "TCS", "HDFCBANK"]
  
 @st.cache_data
 def get_bse_stock_tickers():
@@ -364,6 +385,45 @@ with st.sidebar.expander("🛠️ Advanced Settings"):
     test_limit = st.number_input("Limit Scan (0 = All)", min_value=0, max_value=10000, value=0)
  
 st.sidebar.markdown("---")
+
+# ── Resume / Recovery panel ──────────────────────────────────────────────
+with st.sidebar.expander("💾 Resume & Recovery", expanded=False):
+    st.caption(
+        "Scans checkpoint to memory every "
+        f"{CHECKPOINT_EVERY} symbols. If your session disconnects, click "
+        "**Run Market Scan** again — completed symbols are skipped."
+    )
+    _ckpt_market_label = {
+        "NSE Stocks": "NSE", "BSE Stocks": "BSE",
+        "US Stocks": "US",  "ETFs": "ETF",
+    }.get(st.session_state.get("market_choice_cache", "NSE Stocks"), "NSE")
+    _ckpt_bytes = checkpoint_to_json(_ckpt_market_label)
+    if _ckpt_bytes:
+        st.success(
+            f"Checkpoint available for {_ckpt_market_label} — "
+            "the next scan will resume from it."
+        )
+        st.download_button(
+            "⬇ Download checkpoint (.json)",
+            data=_ckpt_bytes,
+            file_name=f"vpci_checkpoint_{_ckpt_market_label}_{datetime.now():%Y%m%d_%H%M}.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+        if st.button("🗑 Clear checkpoint", use_container_width=True):
+            clear_checkpoint(_ckpt_market_label)
+            st.rerun()
+    else:
+        st.info("No checkpoint stored.")
+    _restored = st.file_uploader(
+        "Restore checkpoint", type=["json"], key="ckpt_uploader",
+        help="Upload a previously-downloaded checkpoint to resume across sessions.",
+    )
+    if _restored is not None:
+        ok, msg = restore_checkpoint_from_upload(_restored.read())
+        (st.success if ok else st.error)(msg)
+
+st.sidebar.markdown("---")
 run_scan = st.sidebar.button("🚀 Run Market Scan", type="primary", use_container_width=True)
  
  
@@ -372,7 +432,10 @@ run_scan = st.sidebar.button("🚀 Run Market Scan", type="primary", use_contain
 # ═══════════════════════════════════════════════════════════════════════════════
 if run_scan:
     params = {**DEFAULT_PARAMS, "relaxed": relaxed_mode, "av_key": "demo"}
- 
+
+    # Cache the chosen market so the recovery expander shows the right checkpoint
+    st.session_state["market_choice_cache"] = market_choice
+
     with st.spinner(f"Reading local database for {market_choice}..."):
         if market_choice == "NSE Stocks":
             symbols = get_nse_stock_tickers()
@@ -387,25 +450,50 @@ if run_scan:
             symbols = fetch_etf_symbols(min_price)
             market_flag = "ETF"
         if test_limit > 0: symbols = symbols[:test_limit]
- 
-    st.info(f"📚 Loaded **{len(symbols)}** symbols. Commencing quantitative analysis...")
- 
-    results, failed = [], []
-    progress_bar = st.progress(0)
+
+    # ── Resume from checkpoint if a compatible one exists ────────────────
+    results, failed, remaining = init_checkpoint(market_flag, symbols)
+    done_symbols = [s for s in symbols if s not in remaining]
+    if results or failed:
+        st.success(
+            f"♻️ Resumed from checkpoint — {len(done_symbols)} of "
+            f"{len(symbols)} already done, {len(remaining)} to go."
+        )
+    else:
+        st.info(f"📚 Loaded **{len(symbols)}** symbols. Commencing quantitative analysis...")
+
+    progress_bar = st.progress(len(done_symbols) / max(len(symbols), 1))
     status_text = st.empty()
- 
+
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(process_symbol, s, params, market_flag): s for s in symbols}
-        done = 0
+        futs = {ex.submit(process_symbol, s, params, market_flag): s for s in remaining}
+        done = len(done_symbols)
+        since_ckpt = 0
         for f in as_completed(futs):
             done += 1
-            progress_bar.progress(done / len(symbols))
+            since_ckpt += 1
+            sym = futs[f]
+            progress_bar.progress(done / max(len(symbols), 1))
             status_text.text(f"Scanning... {done} / {len(symbols)} processed")
             try:
                 r = f.result()
-                if r: results.append(r)
-                else: failed.append(futs[f])
-            except: failed.append(futs[f])
+                if r:
+                    results.append(r)
+                else:
+                    failed.append(sym)
+            except Exception:
+                failed.append(sym)
+            done_symbols.append(sym)
+
+            # Periodic checkpoint so a disconnect doesn't lose all progress
+            if since_ckpt >= CHECKPOINT_EVERY:
+                save_checkpoint(market_flag, symbols, results, failed, done_symbols)
+                since_ckpt = 0
+
+    # Final checkpoint (in case of immediate refresh) then clear on success
+    save_checkpoint(market_flag, symbols, results, failed, done_symbols)
+    clear_checkpoint(market_flag)
+
     status_text.empty()
     progress_bar.empty()
  
@@ -629,10 +717,12 @@ if run_scan:
         }
  
         # ─── ORGANIZED RESULTS TABS ───
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
             "🔥 Fresh Signals", "★ Buyable (7/7)", "◉ Watchlist (6/7)",
             "All Results", "🏆 Top 5 Ranked", "🎯 G4 Pending",
-            "📅 Phase Priority"   # v4 NEW TAB
+            "📅 Phase Priority",        # v4 tab
+            "🏭 Sector Leadership",     # NEW — sector/industry G6+G7 leaders
+            "📈 Sector Rotation"        # NEW — week-over-week history
         ])
  
         with tab1:
@@ -858,4 +948,186 @@ if run_scan:
                         "PRE_AVOID. Skip POST_FADING unless extra confluence (sector momentum, "
                         "fresh 52w high) is present."
                     )
+
+        # ═══════════════════════════════════════════════════════════════════
+        # NEW TAB — Sector & Industry Leadership (G5 + G6 + G7)
+        # ═══════════════════════════════════════════════════════════════════
+        with tab8:
+            st.subheader("🏭 Leading Sectors & Industries — G5 (VPCI) + G6 (Leader RS) + G7 (Above 40w)")
+            st.caption(
+                "Sectors and industries ranked by the count of stocks where the **institutional "
+                "confirmation gates are firing together**. G5 = VPCI accumulation (smart-money "
+                "footprint); G6 = leader RS positive vs index; G7 = price above the 40-week MA "
+                "with EF confirmation (Stage 2 trend). When several constituents of the same "
+                "sector pass all three together, accumulation, relative strength, and trend are "
+                "aligned — the highest-conviction sector to allocate fresh capital to this week."
+            )
+
+            # Build sector map and join onto the FULL scanned universe (df_sorted),
+            # not just buyable stocks, so the breadth picture is complete.
+            _sector_map = load_sector_map("EQUITY_L_2.csv")
+            if _sector_map.empty:
+                st.warning(
+                    "Sector map could not be loaded. Make sure EQUITY_L_2.csv contains "
+                    "the columns: companyId, Name, Sector, Industry."
+                )
+            elif market_flag != "NSE":
+                st.info(
+                    "Sector leadership view is available for NSE scans only "
+                    "(EQUITY_L_2.csv covers NSE-listed stocks)."
+                )
+            else:
+                _df_sect = attach_sector_columns(df_sorted, _sector_map)
+                _lead = build_sector_leadership(_df_sect)
+
+                _both = _lead["sector_both"]
+                _ind  = _lead["industry_both"]
+
+                if _both.empty or _both["stocks_passing"].sum() == 0:
+                    st.info("No stocks pass G5, G6 and G7 together in this scan.")
+                else:
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Stocks passing G5 ∧ G6 ∧ G7", int(_both["stocks_passing"].sum()))
+                    c2.metric("Sectors with ≥1 leader", int((_both["stocks_passing"] > 0).sum()))
+                    c3.metric("Top sector",
+                              _both.iloc[0]["sector"] if len(_both) else "—",
+                              f"{int(_both.iloc[0]['stocks_passing'])} stocks" if len(_both) else "")
+                    st.divider()
+
+                    colA, colB = st.columns(2)
+                    with colA:
+                        st.markdown("##### 🥇 Sectors — G5 ∧ G6 ∧ G7 (strict)")
+                        st.caption("All three gates passing — institutional confirmation cut.")
+                        st.dataframe(
+                            _both.head(20),
+                            use_container_width=True, hide_index=True,
+                        )
+                    with colB:
+                        st.markdown("##### 🏷️ Industries — G5 ∧ G6 ∧ G7 (strict)")
+                        st.caption("Drill-down within sectors — finds the actual sub-theme leading.")
+                        st.dataframe(
+                            _ind.head(20),
+                            use_container_width=True, hide_index=True,
+                        )
+
+                    with st.expander("📊 Broader breadth — Sectors / Industries with G5 ∨ G6 ∨ G7 firing"):
+                        st.caption(
+                            "A wider net for early sector accumulation: stocks passing **any** of "
+                            "the three institutional gates. Useful for spotting sectors just "
+                            "starting to rotate, where the full triple isn't aligned yet."
+                        )
+                        cE1, cE2 = st.columns(2)
+                        with cE1:
+                            st.markdown("**Sectors — G5 ∨ G6 ∨ G7**")
+                            st.dataframe(_lead["sector_either"].head(20),
+                                         use_container_width=True, hide_index=True)
+                        with cE2:
+                            st.markdown("**Industries — G5 ∨ G6 ∨ G7**")
+                            st.dataframe(_lead["industry_either"].head(20),
+                                         use_container_width=True, hide_index=True)
+
+                    with st.expander("🔬 Stock-level view — every passer with sector tags"):
+                        st.dataframe(_lead["stock_table"],
+                                     use_container_width=True, hide_index=True)
+
+                    # Snapshot persistence
+                    st.divider()
+                    st.markdown("##### 💾 Save this week's leadership snapshot")
+                    st.caption(
+                        "Stores the four leadership tables above as a dated JSON. With GitHub "
+                        "secrets configured, the snapshot is committed to your repo so the next "
+                        "tab can show **week-over-week sector rotation**. Without secrets it "
+                        "stays in this session only."
+                    )
+
+                    if st.button("💾 Save snapshot", key="save_snap"):
+                        ok, msg, snap = save_weekly_snapshot(_lead, market_flag)
+                        (st.success if ok else st.warning)(msg)
+
+                    # Always offer a manual download as a fallback
+                    _snap_payload = {
+                        "scan_date":      _date.today().isoformat(),
+                        "scan_timestamp": datetime.now().isoformat(timespec="seconds"),
+                        "market":         market_flag,
+                        "sector_both":     _lead["sector_both"].to_dict(orient="records"),
+                        "industry_both":   _lead["industry_both"].to_dict(orient="records"),
+                        "sector_either":   _lead["sector_either"].to_dict(orient="records"),
+                        "industry_either": _lead["industry_either"].to_dict(orient="records"),
+                    }
+                    import json as _json
+                    st.download_button(
+                        "⬇ Download snapshot (.json)",
+                        data=_json.dumps(_snap_payload, indent=2).encode("utf-8"),
+                        file_name=f"sector_snapshot_{market_flag}_{_date.today():%Y-%m-%d}.json",
+                        mime="application/json",
+                        key="dl_snap",
+                    )
+
+                    # Also a CSV of the strict leadership for quick Excel use
+                    _csv = _both.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        "⬇ Download sector leaders (.csv)",
+                        data=_csv,
+                        file_name=f"sector_leaders_{market_flag}_{_date.today():%Y-%m-%d}.csv",
+                        mime="text/csv",
+                        key="dl_sect_csv",
+                    )
+
+        # ═══════════════════════════════════════════════════════════════════
+        # NEW TAB — Sector Rotation (week-over-week history)
+        # ═══════════════════════════════════════════════════════════════════
+        with tab9:
+            st.subheader("📈 Sector Rotation — Week-Over-Week History")
+            st.caption(
+                "Counts of stocks passing G5 ∧ G6 ∧ G7 per sector across saved weekly snapshots. "
+                "A sector accelerating from 2 → 5 → 9 leaders over three weeks is rotating in; "
+                "a sector decaying is rotating out. Configure GitHub secrets to persist "
+                "snapshots across container restarts."
+            )
+
+            _hist = load_history_from_github()
+            # Always include in-session snapshots too (covers the no-GitHub case)
+            _hist += st.session_state.get("snapshots", [])
+
+            # De-duplicate by (scan_date, market)
+            _seen = set()
+            _dedup = []
+            for s in sorted(_hist, key=lambda d: d.get("scan_date", "")):
+                key = (s.get("scan_date"), s.get("market"))
+                if key in _seen:
+                    continue
+                _seen.add(key)
+                _dedup.append(s)
+            _hist = [s for s in _dedup if s.get("market") == market_flag]
+
+            if not _hist:
+                st.info(
+                    "No history yet for this market. Run a scan, open the **Sector Leadership** "
+                    "tab, and click **Save snapshot**. Each saved week appears here."
+                )
+            else:
+                st.success(f"Loaded {len(_hist)} weekly snapshot(s) for {market_flag}.")
+                _rot = build_rotation_view(_hist, top_n=12)
+                if not _rot.empty:
+                    st.markdown("##### Sector × Week — stocks passing G5 ∧ G6 ∧ G7")
+                    st.dataframe(
+                        _rot.style.background_gradient(axis=None, cmap="Greens"),
+                        use_container_width=True,
+                    )
+
+                    # Compute simple WoW deltas if at least 2 weeks
+                    if _rot.shape[1] >= 2:
+                        _delta = (_rot.iloc[:, -1] - _rot.iloc[:, -2]).sort_values(ascending=False)
+                        cR1, cR2 = st.columns(2)
+                        with cR1:
+                            st.markdown("##### 🚀 Rotating IN (week-over-week)")
+                            _in = _delta[_delta > 0].head(8).rename("Δ leaders").to_frame()
+                            st.dataframe(_in, use_container_width=True)
+                        with cR2:
+                            st.markdown("##### 🪂 Rotating OUT (week-over-week)")
+                            _out = _delta[_delta < 0].head(8).rename("Δ leaders").to_frame()
+                            st.dataframe(_out, use_container_width=True)
+                else:
+                    st.info("Need at least one snapshot with sector data to render the rotation grid.")
+
  
